@@ -26,7 +26,7 @@ def okta_authenticate(domain, username, password, useragent):
 
 	payload = {"username":username, "password":password, "options":{"warnBeforePasswordExpired":True, "multiOptionalFactorEnroll":True}}
 	url = "https://%s/api/v1/authn/" % domain
-	
+
 	try:
 		resp = requests.post(url,data=json.dumps(payload),headers={'Content-Type':'application/json', 'User-Agent':useragent})
 		if resp.status_code == 200:
@@ -51,6 +51,7 @@ def okta_authenticate(domain, username, password, useragent):
 				data_response['success'] = False
 		else:
 			data_response['success'] = False
+			data_response['code'] = resp.status_code
 	except Exception as ex:
 		data_response['error'] = ex
 		pass

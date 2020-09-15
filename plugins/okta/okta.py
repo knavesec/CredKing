@@ -6,6 +6,15 @@ def lambda_handler(event, context):
 	return okta_authenticate(domain, event['username'], event['password'], event['useragent'])
 
 
+def check_throttle(response):
+
+	if response.status_code == 429:
+		return True
+
+	else:
+		return False
+
+
 def okta_authenticate(domain, username, password, useragent):
 	ts = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -22,6 +31,8 @@ def okta_authenticate(domain, username, password, useragent):
 		'action': None,
 		'headers': [],
 		'cookies': [],
+		'sourceip' : None,
+		'throttled' : False
 	}
 
 	payload = {"username":username, "password":password, "options":{"warnBeforePasswordExpired":True, "multiOptionalFactorEnroll":True}}
@@ -29,6 +40,11 @@ def okta_authenticate(domain, username, password, useragent):
 
 	try:
 		resp = requests.post(url,data=json.dumps(payload),headers={'Content-Type':'application/json', 'User-Agent':useragent})
+		data_response['sourceip'] = requests.get("http://icanhazip.com").text.strip()
+
+		if check_throttle(resp) == True:
+			data_response['throttled'] = True
+
 		if resp.status_code == 200:
 			resp_json = json.loads(resp.text)
 			if resp_json.get("status") == "LOCKED_OUT": #Warning: administrators can configure Okta to not indicate that an account is locked out. Fair warning ;)
